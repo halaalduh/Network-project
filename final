@@ -1,0 +1,747 @@
+import java.io.*;
+import java.net.Socket;
+import java.util.Scanner;
+
+public class Client {
+    private Socket socket;
+    private BufferedReader in;
+    private PrintWriter out;
+    private final Scanner sc = new Scanner(System.in);
+
+    public static void main(String[] args) { new Client().startProgram(); }
+
+    // كان اسمها run()
+    private void startProgram() {
+        System.out.println("=== Library Reservation (Console) ===");
+
+        String host = "localhost";
+        int port = 9090;
+
+        if (!connectToServer(host, port)) return;
+
+        // كان اسمها register()
+        registerUser();
+
+        while (true) {
+            System.out.println("\n1) Libraries  2) Topics  3) Books  4) Reserve  5) Exit");
+            System.out.print("Choose: ");
+            String ch = sc.nextLine().trim();
+
+            switch (ch) {
+                case "1":
+                    sendCommandAndPrint("LIBRARIES");
+                    break;
+                case "2":
+                    System.out.print("Library: ");
+                    String lib2 = sc.nextLine().trim();
+                    sendCommandAndPrint("TOPICS:" + lib2);
+                    break;
+                case "3":
+                    System.out.print("Library: ");
+                    String lib3 = sc.nextLine().trim();
+                    System.out.print("Topic  : ");
+                    String top3 = sc.nextLine().trim();
+                    sendCommandAndPrint("BOOKS:" + lib3 + ":" + top3);
+                    break;
+                case "4":
+                    System.out.print("Library: ");
+                    String lib4 = sc.nextLine().trim();
+                    System.out.print("Topic  : ");
+                    String top4 = sc.nextLine().trim();
+                    System.out.print("Book   : ");
+                    String bk4 = sc.nextLine().trim();
+                    sendCommandAndPrint("RESERVE:" + lib4 + ":" + top4 + ":" + bk4);
+                    break;
+                case "5":
+                    closeConnection();
+                    System.out.println("Goodbye!");
+                    return;
+                default:
+                    System.out.println("Invalid choice.");
+                    break;
+            }
+        }
+    }
+
+    // كان connect()
+    private boolean connectToServer(String host, int port) {
+        try {
+            socket = new Socket(host, port);
+            in  = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
+            System.out.println("Connected to server on " + host + ":" + port);
+            return true;
+        } catch (IOException e) {
+            System.out.println(" Connection failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    // كان register()
+    private void registerUser() {
+        while (true) {
+            System.out.print("Username: ");
+            String user = sc.nextLine().trim();
+            System.out.print("Password: ");
+            String pass = sc.nextLine().trim();
+
+            out.println("REGISTER:" + user + ":" + pass);
+            String resp = readOneLine();
+
+            if ("OK".equals(resp)) {
+                System.out.println("Registered successfully!");
+                break;
+            } else {
+                System.out.println(resp + " — try again.");
+            }
+        }
+    }
+
+    // كان sendAndPrint()
+    private void sendCommandAndPrint(String line) {
+        out.println(line);
+        String resp = readOneLine();
+        System.out.println(resp == null ? "(no response)" : resp);
+    }
+
+    // كان readOne()
+    private String readOneLine() {
+        try {
+            String s = in.readLine();
+            if (s == null) { System.out.println("Disconnected."); closeConnection(); }
+            return s;
+        } catch (IOException e) {
+            System.out.println("Read error: " + e.getMessage());
+            return null;
+        }
+    }
+
+    // كان close()
+    private void closeConnection() {
+        try { if (socket != null) socket.close(); } catch (IOException ignored) {}
+    }
+}
+
+
+Connection
+
+
+
+
+import java.io.*;
+import java.net.Socket;
+
+public class Connection {
+    private Socket socket;
+    private BufferedReader in;
+    private PrintWriter out;
+
+    public Connection(String host, int port) throws IOException {
+        socket = new Socket(host, port);
+        in  = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+        out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
+    }
+
+    // كان send()
+    public String sendRequest(String line) throws IOException {
+        out.println(line);
+        return in.readLine();
+    }
+
+    // كان close()
+    public void closeConnection() {
+        try { if (in  != null) in.close();  } catch (Exception ignore) {}
+        try { if (out != null) out.close(); } catch (Exception ignore) {}
+        try { if (socket != null) socket.close(); } catch (Exception ignore) {}
+    }
+}
+
+
+
+
+ClientHandler
+
+
+
+
+import java.io.*;
+import java.net.Socket;
+import java.util.*;
+import java.util.Set;
+import java.util.List;
+
+public class ClientHandler implements Runnable {
+    private final Socket socket;
+    private final Map<String, String> users;
+    private final Library catalog;
+    private final Reservation store;
+    private BufferedReader in;
+    private PrintWriter out;
+    private String email;
+
+    public ClientHandler(Socket socket, Map<String, String> users, Library catalog, Reservation store) {
+        this.socket = socket;
+        this.users = users;
+        this.catalog = catalog;
+        this.store = store;
+    }
+
+    @Override
+    public void run() {
+        try {
+            in  = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
+            logMessage("Connected.");
+            String line;
+            while ((line = in.readLine()) != null) {
+                String msg = normalizeText(line);
+                if (msg.length() == 0) continue;
+                logMessage("REQ  :" + msg);
+                handleRequest(msg);
+            }
+        } catch (IOException e) {
+            logMessage("IO error: " + e.getMessage());
+        } finally {
+            closeClientConnection();
+        }
+    }
+
+    // كان handle()
+    private void handleRequest(String msg) {
+        try {
+            if (msg.startsWith("REGISTER:")) {
+                handleRegister(msg);
+            } else if (msg.equals("LIBRARIES")) {
+                handleLibraries();
+            } else if (msg.startsWith("TOPICS:")) {
+                handleTopics(msg);
+            } else if (msg.startsWith("BOOKS:")) {
+                handleBooks(msg);
+            } else if (msg.startsWith("RESERVE:")) {
+                handleReserve(msg);
+            } else if (msg.equals("PING")) {
+                sendResponse("PONG");
+            } else {
+                sendResponse("ERR:Unknown command");
+            }
+        } catch (Exception e) {
+            sendResponse("ERR:" + e.getMessage());
+        }
+    }
+
+    // كان onRegister()
+    private void handleRegister(String msg) {
+        String[] p = msg.split(":", 3);
+        if (p.length != 3) { sendResponse("ERR:Use REGISTER:email:password"); return; }
+        String mail = normalizeText(p[1]);
+        String pass = normalizeText(p[2]);
+        if (mail.length() == 0 || pass.length() == 0) { sendResponse("ERR:Empty email/password"); return; }
+        synchronized (users) {
+            if (users.containsKey(mail)) { sendResponse("ERR:Email exists"); return; }
+            users.put(mail, pass);
+        }
+        this.email = mail;
+        sendResponse("OK");
+    }
+
+    // كان onLibraries()
+    private void handleLibraries() {
+        Set<String> libs = catalog.getLibraries();
+        sendResponse("LIBRARIES:" + joinWithComma(libs));
+    }
+
+    // كان onTopics()
+    private void handleTopics(String msg) {
+        String[] p = msg.split(":", 2);
+        if (p.length != 2) { sendResponse("ERR:Use TOPICS:LibraryName"); return; }
+        String lib = p[1].trim();
+        Set<String> topics = catalog.getTopics(lib);
+        if (topics == null || topics.isEmpty()) { sendResponse("ERR:Library not found or no topics"); return; }
+        sendResponse("TOPICS:" + lib + ":" + joinWithComma(topics));
+    }
+
+    // كان onBooks()
+    private void handleBooks(String msg) {
+        String[] p = msg.split(":", 3);
+        if (p.length != 3) { sendResponse("ERR:Use BOOKS:Library:Topic"); return; }
+        String lib = p[1].trim();
+        String topic = p[2].trim();
+        List<String> list = catalog.getAvailableBooks(lib, topic);
+        if (list == null || list.isEmpty()) {
+            sendResponse("BOOKS:" + lib + ":" + topic + ":NO_BOOKS");
+        } else {
+            sendResponse("BOOKS:" + lib + ":" + topic + ":" + joinListWithComma(list));
+        }
+    }
+
+    // كان onReserve()
+    private void handleReserve(String msg) {
+        String[] p = msg.split(":", 4);
+        if (p.length != 4) { sendResponse("ERR:Use RESERVE:Library:Topic:Book"); return; }
+        String lib = p[1].trim();
+        String topic = p[2].trim();
+        String book = p[3].trim();
+        String who = (email == null ? "anonymous" : email);
+        String result = store.reserveBook(who, lib, topic, book);
+        if (result.startsWith("SUCCESS")) {
+            sendResponse("RESERVED");
+        } else if (result.indexOf("already reserved") >= 0) {
+            sendResponse("NOT_AVAILABLE");
+        } else {
+            sendResponse("ERR:" + result.replace("ERROR:", ""));
+        }
+    }
+
+    // كان reply()
+    private void sendResponse(String s) {
+        out.println(s);
+        logMessage("RESP -> " + s);
+    }
+
+    // كان cleanup()
+    private void closeClientConnection() {
+        logMessage("Disconnected.");
+        try { if (in != null) in.close(); } catch (IOException ignore) {}
+        try { if (out != null) out.close(); } catch (Exception ignore) {}
+        try { socket.close(); } catch (IOException ignore) {}
+    }
+
+    // كان normalize()
+    private String normalizeText(String s) {
+        if (s == null) return "";
+        return s.trim().replaceAll("\\s+", " ");
+    }
+
+    private String joinWithComma(Set<String> set) {
+        if (set == null || set.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (String x : set) {
+            if (sb.length() > 0) sb.append(",");
+            sb.append(x.trim());
+        }
+        return sb.toString();
+    }
+
+    private String joinListWithComma(List<String> list) {
+        if (list == null || list.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (String x : list) {
+            if (sb.length() > 0) sb.append(",");
+            sb.append(x.trim());
+        }
+        return sb.toString();
+    }
+
+    // كان log()
+    private void logMessage(String m) {
+        System.out.println("[Client-" + socket.getPort() + "] " + m);
+    }
+}
+
+
+Library
+
+
+import java.util.*;
+
+public class Library {
+    private final Map<String, Map<String, Map<String, Boolean>>> data = new HashMap<>();
+
+    public Library() { bootstrap(); }
+
+    private void bootstrap() {
+        // (نفس الداتا)
+        String[] libraries = {"Central Library", "Science Library", "Digital Library"};
+        String[][] topics = {
+            {"Computer Science","Mathematics","Physics","Biology","Chemistry"},
+            {"Engineering","Medicine","Law","Business","Arts"},
+            {"Technology","Research","Education","History","Literature"}
+        };
+        String[][][] books = { /* نفس المصفوفات كما هي */ 
+            {
+                {"Java Programming","Data Structures","Algorithms","Database Systems","Networking"},
+                {"Calculus","Linear Algebra","Statistics","Discrete Math","Number Theory"},
+                {"Quantum Physics","Classical Mechanics","Thermodynamics","Electromagnetism","Optics"},
+                {"Genetics","Microbiology","Ecology","Anatomy","Botany"},
+                {"Organic Chemistry","Inorganic Chemistry","Biochemistry","Analytical Chemistry","Physical Chemistry"}
+            },
+            {
+                {"Electrical Engineering","Mechanical Engineering","Civil Engineering","Chemical Engineering","Software Engineering"},
+                {"Human Anatomy","Pharmacology","Pathology","Surgery","Internal Medicine"},
+                {"Constitutional Law","Criminal Law","Corporate Law","International Law","Family Law"},
+                {"Marketing","Finance","Management","Accounting","Economics"},
+                {"Painting","Sculpture","Music","Dance","Theater"}
+            },
+            {
+                {"Artificial Intelligence","Machine Learning","Web Development","Mobile Apps","Cybersecurity"},
+                {"Academic Research","Scientific Method","Thesis Writing","Data Analysis","Publication"},
+                {"Teaching Methods","Curriculum Design","Educational Psychology","Classroom Management","E-Learning"},
+                {"Ancient History","Medieval History","Modern History","World Wars","Cultural History"},
+                {"Fiction","Poetry","Drama","Biography","Criticism"}
+            }
+        };
+
+        for (int i = 0; i < libraries.length; i++) {
+            Map<String, Map<String, Boolean>> lib = new HashMap<>();
+            for (int t = 0; t < topics[i].length; t++) {
+                Map<String, Boolean> topicBooks = new HashMap<>();
+                for (int b = 0; b < books[i][t].length; b++) {
+                    topicBooks.put(books[i][t][b], Boolean.TRUE);
+                }
+                lib.put(topics[i][t], topicBooks);
+            }
+            data.put(libraries[i], lib);
+        }
+    }
+
+    // كان libraries()
+    public Set<String> getLibraries() { return data.keySet(); }
+
+    // كان topics()
+    public Set<String> getTopics(String library) {
+        Map<String, Map<String, Boolean>> lib = data.get(library);
+        if (lib == null) return Collections.emptySet();
+        return lib.keySet();
+    }
+
+    // كان availableBooks()
+    public List<String> getAvailableBooks(String library, String topic) {
+        Map<String, Map<String, Boolean>> lib = data.get(library);
+        if (lib == null) return Collections.emptyList();
+        Map<String, Boolean> books = lib.get(topic);
+        if (books == null) return Collections.emptyList();
+        List<String> out = new ArrayList<String>();
+        for (Map.Entry<String, Boolean> e : books.entrySet()) {
+            if (Boolean.TRUE.equals(e.getValue())) out.add(e.getKey());
+        }
+        return out;
+    }
+
+    // كان raw()
+    Map<String, Map<String, Map<String, Boolean>>> getRawData() { return data; }
+}
+
+
+RegisterFrame
+
+
+
+import javax.swing.*;
+import java.awt.*;
+import java.io.IOException;
+
+public class RegisterFrame extends JFrame {
+    private JTextField userField;
+    private JPasswordField passField;
+    private JButton registerBtn;
+    private static final String HOST = "localhost";
+    private static final int PORT = 9090;
+
+    public static void main(String[] args) {
+        SwingUtilities.invokeLater(new Runnable() {
+            public void run() { new RegisterFrame().setVisible(true); }
+        });
+    }
+
+    public RegisterFrame() {
+        setTitle("Register");
+        setSize(420, 220);
+        setLocationRelativeTo(null);
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        JLabel title = new JLabel("Create a new account", SwingConstants.CENTER);
+        title.setFont(new Font("Segoe UI", Font.BOLD, 16));
+        userField = new JTextField(18);
+        passField = new JPasswordField(18);
+        registerBtn = new JButton("Register & Continue");
+        JPanel grid = new JPanel(new GridLayout(2, 2, 8, 8));
+        grid.add(new JLabel("Username (email):"));
+        grid.add(userField);
+        grid.add(new JLabel("Password:"));
+        grid.add(passField);
+        JPanel root = new JPanel(new BorderLayout(10, 10));
+        root.setBorder(BorderFactory.createEmptyBorder(10,10,10,10));
+        root.add(title, BorderLayout.NORTH);
+        root.add(grid, BorderLayout.CENTER);
+        root.add(registerBtn, BorderLayout.SOUTH);
+        setContentPane(root);
+        registerBtn.addActionListener(e -> handleRegisterButton());
+    }
+
+    // كان doRegister()
+    private void handleRegisterButton() {
+        String user = userField.getText().trim();
+        String pass = new String(passField.getPassword()).trim();
+        if (user.length() == 0 || pass.length() == 0) {
+            JOptionPane.showMessageDialog(this, "Please fill all fields.");
+            return;
+        }
+        Connection conn = null;
+        try {
+            conn = new Connection(HOST, PORT);
+            String resp = conn.sendRequest("REGISTER:" + user + ":" + pass);
+            if ("OK".equals(resp)) {
+                JOptionPane.showMessageDialog(this, "Registered ✓");
+                openReservationWindow(conn, user);
+                return;
+            } else if ("ERR:Email exists".equals(resp)) {
+                conn.closeConnection();
+                JOptionPane.showMessageDialog(this, "Username exists. Choose another.");
+            } else {
+                conn.closeConnection();
+                JOptionPane.showMessageDialog(this, resp);
+            }
+        } catch (IOException ex) {
+            if (conn != null) conn.closeConnection();
+            JOptionPane.showMessageDialog(this, "Cannot connect to server.");
+        }
+    }
+
+    // كان openReservation()
+    private void openReservationWindow(Connection conn, String username) {
+        dispose();
+        ReservationFrame rf = new ReservationFrame(conn, username);
+        rf.setVisible(true);
+    }
+}
+
+
+Reservation
+
+
+import java.util.*;
+
+public class Reservation {
+    private final Library catalog;
+    private final Map<String, String> reservations = new HashMap<>();
+
+    public Reservation(Library catalog) {
+        this.catalog = catalog;
+    }
+
+    // كان reserve()
+    public synchronized String reserveBook(String user, String library, String topic, String book) {
+        if (isBlankString(user) || isBlankString(library) || isBlankString(topic) || isBlankString(book)) {
+            return "ERROR:Bad args";
+        }
+
+        Map<String, Map<String, Boolean>> lib = catalog.getRawData().get(library);
+        if (lib == null) return "ERROR:Library not found";
+        Map<String, Boolean> topicBooks = lib.get(topic);
+        if (topicBooks == null) return "ERROR:Topic not found";
+        Boolean available = topicBooks.get(book);
+        if (available == null) return "ERROR:Book not found";
+
+        String key = library + ":" + topic + ":" + book;
+        String owner = reservations.get(key);
+        if (owner != null && !owner.equals(user)) return "ERROR:Book already reserved";
+        if (!Boolean.TRUE.equals(available)) return "ERROR:Book already reserved";
+
+        topicBooks.put(book, Boolean.FALSE);
+        reservations.put(key, user);
+
+        return "SUCCESS:Book '" + book + "' reserved from " + library + " (" + topic + ")";
+    }
+
+    // كان isBlank()
+    private boolean isBlankString(String s) {
+        return s == null || s.trim().isEmpty();
+    }
+}
+
+
+ReservationFrame
+
+
+import javax.swing.*;
+import java.awt.*;
+import java.io.IOException;
+
+public class ReservationFrame extends JFrame {
+    private final Connection connection;
+    private final String username;
+    private JComboBox<String> libraryCombo;
+    private JComboBox<String> topicCombo;
+    private DefaultListModel<String> bookModel;
+    private JList<String> bookList;
+    private JButton btnTopics, btnBooks, btnReserve, btnLogout;
+
+    public ReservationFrame(Connection connection, String username) {
+        this.connection = connection;
+        this.username = username;
+        setTitle("Reservation — " + username);
+        setSize(680, 460);
+        setLocationRelativeTo(null);
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        buildUI();
+        loadLibrariesFromServer();
+    }
+
+    private void buildUI() {
+        JLabel title = new JLabel("Book Reservation", SwingConstants.CENTER);
+        title.setFont(new Font("Segoe UI", Font.BOLD, 16));
+        libraryCombo = new JComboBox<String>();
+        topicCombo = new JComboBox<String>();
+        bookModel = new DefaultListModel<String>();
+        bookList = new JList<String>(bookModel);
+        btnTopics = new JButton("Show Topics");
+        btnBooks = new JButton("Show Books");
+        btnReserve = new JButton("Reserve");
+        btnLogout = new JButton("Logout");
+        JPanel grid = new JPanel(new GridLayout(2,2,10,10));
+        grid.add(new JLabel("Library:")); grid.add(libraryCombo);
+        grid.add(new JLabel("Topic:")); grid.add(topicCombo);
+        JScrollPane bookScroll = new JScrollPane(bookList);
+        bookScroll.setBorder(BorderFactory.createTitledBorder("Available Books"));
+        JPanel buttons = new JPanel();
+        buttons.add(btnTopics);
+        buttons.add(btnBooks);
+        buttons.add(btnReserve);
+        buttons.add(btnLogout);
+        JPanel root = new JPanel(new BorderLayout(10,10));
+        root.setBorder(BorderFactory.createEmptyBorder(10,10,10,10));
+        root.add(title, BorderLayout.NORTH);
+        root.add(grid, BorderLayout.CENTER);
+        root.add(bookScroll, BorderLayout.EAST);
+        root.add(buttons, BorderLayout.SOUTH);
+        setContentPane(root);
+        btnTopics.addActionListener(e -> loadTopicsForSelectedLibrary());
+        btnBooks.addActionListener(e -> loadBooksForSelectedTopic());
+        btnReserve.addActionListener(e -> doReserveNow());
+        btnLogout.addActionListener(e -> handleLogoutButton());
+    }
+
+    // كان loadLibraries()
+    private void loadLibrariesFromServer() {
+        try {
+            String resp = connection.sendRequest("LIBRARIES");
+            libraryCombo.removeAllItems();
+            if (resp != null && resp.startsWith("LIBRARIES:")) {
+                String body = resp.substring("LIBRARIES:".length());
+                String[] libs = body.split(",");
+                for (int i = 0; i < libs.length; i++) libraryCombo.addItem(libs[i].trim());
+            } else {
+                JOptionPane.showMessageDialog(this, "Failed to load libraries.\n" + resp);
+            }
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this, "I/O: " + ex.getMessage());
+        }
+    }
+
+    // كان loadTopics()
+    private void loadTopicsForSelectedLibrary() {
+        try {
+            Object sel = libraryCombo.getSelectedItem();
+            if (sel == null) return;
+            String lib = sel.toString();
+            String resp = connection.sendRequest("TOPICS:" + lib);
+            topicCombo.removeAllItems();
+            if (resp != null && resp.startsWith("TOPICS:")) {
+                String[] parts = resp.split(":");
+                if (parts.length >= 3) {
+                    String[] topics = parts[2].split(",");
+                    for (int i = 0; i < topics.length; i++) topicCombo.addItem(topics[i].trim());
+                }
+            } else {
+                JOptionPane.showMessageDialog(this, "No topics.\n" + resp);
+            }
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this, "I/O: " + ex.getMessage());
+        }
+    }
+
+    // كان loadBooks()
+    private void loadBooksForSelectedTopic() {
+        try {
+            Object l = libraryCombo.getSelectedItem();
+            Object t = topicCombo.getSelectedItem();
+            if (l == null || t == null) return;
+            String resp = connection.sendRequest("BOOKS:" + l.toString() + ":" + t.toString());
+            bookModel.clear();
+            if (resp != null && resp.indexOf(":NO_BOOKS") >= 0) {
+                bookModel.addElement("No available books.");
+            } else if (resp != null && resp.startsWith("BOOKS:")) {
+                String[] parts = resp.split(":");
+                if (parts.length >= 4) {
+                    String[] books = parts[3].split(",");
+                    for (int i = 0; i < books.length; i++) bookModel.addElement(books[i].trim());
+                }
+            } else {
+                JOptionPane.showMessageDialog(this, "Failed to load books.\n" + resp);
+            }
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this, "I/O: " + ex.getMessage());
+        }
+    }
+
+    // كان reserve()
+    private void doReserveNow() {
+        try {
+            Object l = libraryCombo.getSelectedItem();
+            Object t = topicCombo.getSelectedItem();
+            String b = bookList.getSelectedValue();
+            if (l == null || t == null || b == null) return;
+            if (b.startsWith("No available")) return;
+            String resp = connection.sendRequest("RESERVE:" + l.toString() + ":" + t.toString() + ":" + b);
+            if ("RESERVED".equals(resp)) {
+                JOptionPane.showMessageDialog(this, "Reserved ✓");
+                loadBooksForSelectedTopic();
+            } else if ("NOT_AVAILABLE".equals(resp)) {
+                JOptionPane.showMessageDialog(this, "Already reserved by someone else.");
+                loadBooksForSelectedTopic();
+            } else {
+                JOptionPane.showMessageDialog(this, resp);
+            }
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this, "I/O: " + ex.getMessage());
+        }
+    }
+
+    // كان doLogout()
+    private void handleLogoutButton() {
+        try { connection.closeConnection(); } catch (Exception ignore) {}
+        dispose();
+        RegisterFrame rf = new RegisterFrame();
+        rf.setVisible(true);
+    }
+}
+
+
+
+
+ReservationServer
+
+
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.HashMap;
+import java.util.Map;
+
+public class ReservationServer {
+    private static final int PORT = 9090;
+    static final Map<String, String> USERS = new HashMap<>();
+    static final Library CATALOG = new Library();
+    static final Reservation STORE = new Reservation(CATALOG);
+
+    public static void main(String[] args) {
+        System.out.println("Library Reservation Server running on port " + PORT);
+        ServerSocket serverSocket = null;
+        try {
+            serverSocket = new ServerSocket(PORT);
+            while (true) {
+                System.out.println("Waiting for client connection...");
+                Socket socket = serverSocket.accept();
+                System.out.println("[New Connection] " + socket.getInetAddress() + ":" + socket.getPort());
+                ClientHandler handler = new ClientHandler(socket, USERS, CATALOG, STORE);
+                Thread t = new Thread(handler, "Client-" + socket.getPort());
+                t.start();
+            }
+        } catch (IOException e) {
+            System.err.println("Server error: " + e.getMessage());
+        } finally {
+            try { if (serverSocket != null) serverSocket.close(); } catch (IOException ignore) {}
+        }
+    }
+}
+
+
